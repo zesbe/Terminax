@@ -6,6 +6,8 @@ import {
   View,
   TouchableOpacity,
   Text,
+  NativeEventEmitter,
+  NativeModules,
 } from 'react-native';
 import {TerminalSession, TerminalOutput, FileItem} from './types';
 import Terminal from './components/Terminal';
@@ -14,16 +16,75 @@ import CustomKeyboard from './components/CustomKeyboard';
 import FileBrowser from './components/FileBrowser';
 import ShellModule from './utils/ShellNativeModule';
 
+const shellEventEmitter = new NativeEventEmitter(NativeModules.ShellModule);
+
 const App = () => {
   const [sessions, setSessions] = useState<TerminalSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>('');
   const [showKeyboard, setShowKeyboard] = useState(true);
   const [showFileBrowser, setShowFileBrowser] = useState(false);
+  const [commandHistory, setCommandHistory] = useState<string[]>([]);
+  const [currentCommandId, setCurrentCommandId] = useState<string>('');
 
   // Initialize first session on mount
   useEffect(() => {
     initializeApp();
   }, []);
+
+  // Setup event listeners for streaming output
+  useEffect(() => {
+    const outputListener = shellEventEmitter.addListener(
+      'onCommandOutput',
+      (event: {commandId: string; type: string; data: string}) => {
+        const session = getActiveSession();
+        if (!session || event.commandId !== currentCommandId) return;
+
+        const newOutput: TerminalOutput = {
+          id: `${Date.now()}-${Math.random()}`,
+          text: event.data,
+          type: event.type === 'error' ? 'error' : 'output',
+          timestamp: Date.now(),
+        };
+
+        updateSession(session.id, {
+          outputs: [...session.outputs, newOutput],
+        });
+      },
+    );
+
+    const completeListener = shellEventEmitter.addListener(
+      'onCommandComplete',
+      (event: {commandId: string; exitCode: number}) => {
+        setCurrentCommandId('');
+      },
+    );
+
+    const errorListener = shellEventEmitter.addListener(
+      'onCommandError',
+      (event: {commandId: string; error: string}) => {
+        const session = getActiveSession();
+        if (!session || event.commandId !== currentCommandId) return;
+
+        const errorOutput: TerminalOutput = {
+          id: `${Date.now()}-err`,
+          text: `Error: ${event.error}`,
+          type: 'error',
+          timestamp: Date.now(),
+        };
+
+        updateSession(session.id, {
+          outputs: [...session.outputs, errorOutput],
+        });
+        setCurrentCommandId('');
+      },
+    );
+
+    return () => {
+      outputListener.remove();
+      completeListener.remove();
+      errorListener.remove();
+    };
+  }, [currentCommandId, activeSessionId]);
 
   const initializeApp = async () => {
     try {
@@ -124,14 +185,97 @@ const App = () => {
     );
   };
 
+  const handleBuiltinCommand = (
+    session: TerminalSession,
+    command: string,
+  ): boolean => {
+    const cmd = command.trim().toLowerCase();
+    const updatedOutputs = [...session.outputs];
+
+    // CLEAR command
+    if (cmd === 'clear' || cmd === 'cls') {
+      updateSession(session.id, {outputs: []});
+      return true;
+    }
+
+    // HELP command
+    if (cmd === 'help') {
+      const helpText = [
+        'Built-in Commands:',
+        '  clear, cls    - Clear terminal screen',
+        '  help          - Show this help',
+        '  history       - Show command history',
+        '  exit          - Close current session',
+        '',
+        'Common Commands:',
+        '  ls            - List files',
+        '  pwd           - Print working directory',
+        '  cd <dir>      - Change directory',
+        '  echo <text>   - Print text',
+        '  cat <file>    - Display file contents',
+        '  ping <host>   - Ping network host',
+        '  ps            - Show processes',
+        '  uname -a      - System information',
+      ];
+      helpText.forEach(line => {
+        updatedOutputs.push({
+          id: `${Date.now()}-${Math.random()}`,
+          text: line,
+          type: 'output',
+          timestamp: Date.now(),
+        });
+      });
+      updateSession(session.id, {outputs: updatedOutputs});
+      return true;
+    }
+
+    // HISTORY command
+    if (cmd === 'history') {
+      commandHistory.forEach((histCmd, index) => {
+        updatedOutputs.push({
+          id: `${Date.now()}-${index}`,
+          text: `${index + 1}  ${histCmd}`,
+          type: 'output',
+          timestamp: Date.now(),
+        });
+      });
+      updateSession(session.id, {outputs: updatedOutputs});
+      return true;
+    }
+
+    // EXIT command
+    if (cmd === 'exit') {
+      if (sessions.length > 1) {
+        handleCloseSession(session.id);
+      } else {
+        updatedOutputs.push({
+          id: `${Date.now()}-exit`,
+          text: 'Cannot exit last session',
+          type: 'error',
+          timestamp: Date.now(),
+        });
+        updateSession(session.id, {outputs: updatedOutputs});
+      }
+      return true;
+    }
+
+    return false;
+  };
+
   const handleExecuteCommand = async (command: string) => {
     const session = getActiveSession();
     if (!session) return;
 
+    const trimmedCommand = command.trim();
+    if (!trimmedCommand) return;
+
+    // Add to command history
+    setCommandHistory(prev => [...prev, trimmedCommand]);
+
     // Add command to outputs
     const commandOutput: TerminalOutput = {
       id: `${Date.now()}-cmd`,
-      text: command,
+      text: trimmedCommand,
       type: 'command',
       timestamp: Date.now(),
     };
@@ -139,44 +283,33 @@ const App = () => {
     const updatedOutputs = [...session.outputs, commandOutput];
     updateSession(session.id, {outputs: updatedOutputs});
 
+    // Check for built-in commands
+    if (handleBuiltinCommand(session, trimmedCommand)) {
+      return;
+    }
+
     try {
-      // Execute command
-      const result = await ShellModule.executeCommand(
-        command,
+      // Use streaming execution for better real-time output
+      const commandId = `${session.id}-${Date.now()}`;
+      setCurrentCommandId(commandId);
+
+      await ShellModule.executeCommandStreaming(
+        trimmedCommand,
         session.currentDirectory,
+        commandId,
       );
 
-      const newOutputs = [...updatedOutputs];
-
-      // Add output
-      if (result.output) {
-        newOutputs.push({
-          id: `${Date.now()}-out`,
-          text: result.output.trim(),
-          type: 'output',
-          timestamp: Date.now(),
-        });
-      }
-
-      // Add error
-      if (result.error) {
-        newOutputs.push({
-          id: `${Date.now()}-err`,
-          text: result.error.trim(),
-          type: 'error',
-          timestamp: Date.now(),
-        });
-      }
-
-      // Check if command was cd
-      if (command.trim().startsWith('cd ')) {
-        const newDir = await ShellModule.getCurrentDirectory();
-        updateSession(session.id, {
-          outputs: newOutputs,
-          currentDirectory: newDir,
-        });
-      } else {
-        updateSession(session.id, {outputs: newOutputs});
+      // Handle directory change
+      if (trimmedCommand.startsWith('cd ')) {
+        try {
+          const newDir = await ShellModule.getCurrentDirectory();
+          const currentSession = sessions.find(s => s.id === session.id);
+          if (currentSession) {
+            updateSession(session.id, {currentDirectory: newDir});
+          }
+        } catch (e) {
+          // Ignore
+        }
       }
     } catch (error: any) {
       const errorOutput: TerminalOutput = {
@@ -185,9 +318,13 @@ const App = () => {
         type: 'error',
         timestamp: Date.now(),
       };
-      updateSession(session.id, {
-        outputs: [...updatedOutputs, errorOutput],
-      });
+      const currentSession = sessions.find(s => s.id === session.id);
+      if (currentSession) {
+        updateSession(session.id, {
+          outputs: [...currentSession.outputs, errorOutput],
+        });
+      }
+      setCurrentCommandId('');
     }
   };
 
@@ -292,7 +429,11 @@ const App = () => {
       )}
 
       {/* Custom Keyboard */}
-      <CustomKeyboard visible={showKeyboard} onKeyPress={handleKeyPress} />
+      <CustomKeyboard
+        visible={showKeyboard}
+        onKeyPress={handleKeyPress}
+        onQuickCommand={handleExecuteCommand}
+      />
 
       {/* File Browser */}
       {activeSession && (

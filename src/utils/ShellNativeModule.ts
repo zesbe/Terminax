@@ -6,6 +6,12 @@ interface ShellModuleType {
     error: string;
     exitCode: number;
   }>;
+  executeCommandStreaming(
+    command: string,
+    workingDir: string,
+    commandId: string,
+  ): Promise<{exitCode: number}>;
+  killCommand(commandId: string): Promise<boolean>;
   listFiles(path: string): Promise<Array<{
     name: string;
     path: string;

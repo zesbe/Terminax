@@ -7,9 +7,16 @@ import java.io.*
 class ShellModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
 
     private val reactContext: ReactApplicationContext = reactContext
+    private var commandProcesses = mutableMapOf<String, Process>()
 
     override fun getName(): String {
         return "ShellModule"
+    }
+
+    private fun sendEvent(eventName: String, params: WritableMap?) {
+        reactContext
+            .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+            .emit(eventName, params)
     }
 
     private fun getShellConfig(): Pair<String, Array<String>> {
@@ -211,6 +218,112 @@ class ShellModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
             promise.resolve(info)
         } catch (e: Exception) {
             promise.reject("SHELL_INFO_ERROR", e.message, e)
+        }
+    }
+
+    @ReactMethod
+    fun executeCommandStreaming(command: String, workingDir: String, commandId: String, promise: Promise) {
+        Thread {
+            try {
+                val (shell, env) = getShellConfig()
+
+                // Validate working directory
+                var validWorkingDir = File(workingDir)
+                if (!validWorkingDir.exists() || !validWorkingDir.isDirectory) {
+                    validWorkingDir = reactContext.filesDir
+                }
+
+                // Execute command
+                val process = Runtime.getRuntime().exec(
+                    arrayOf(shell, "-c", command),
+                    env,
+                    validWorkingDir
+                )
+
+                commandProcesses[commandId] = process
+
+                // Stream output in real-time
+                val outputThread = Thread {
+                    try {
+                        BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
+                            var line: String?
+                            while (reader.readLine().also { line = it } != null) {
+                                val params = Arguments.createMap()
+                                params.putString("commandId", commandId)
+                                params.putString("type", "output")
+                                params.putString("data", line)
+                                sendEvent("onCommandOutput", params)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        // Stream closed
+                    }
+                }
+
+                val errorThread = Thread {
+                    try {
+                        BufferedReader(InputStreamReader(process.errorStream)).use { reader ->
+                            var line: String?
+                            while (reader.readLine().also { line = it } != null) {
+                                val params = Arguments.createMap()
+                                params.putString("commandId", commandId)
+                                params.putString("type", "error")
+                                params.putString("data", line)
+                                sendEvent("onCommandOutput", params)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        // Stream closed
+                    }
+                }
+
+                outputThread.start()
+                errorThread.start()
+
+                // Wait for process to complete
+                val exitCode = process.waitFor()
+
+                // Wait for threads to finish reading
+                outputThread.join(1000)
+                errorThread.join(1000)
+
+                // Send completion event
+                val params = Arguments.createMap()
+                params.putString("commandId", commandId)
+                params.putInt("exitCode", exitCode)
+                sendEvent("onCommandComplete", params)
+
+                commandProcesses.remove(commandId)
+
+                val result = Arguments.createMap()
+                result.putInt("exitCode", exitCode)
+                promise.resolve(result)
+
+            } catch (e: Exception) {
+                val params = Arguments.createMap()
+                params.putString("commandId", commandId)
+                params.putString("error", e.message ?: "Unknown error")
+                sendEvent("onCommandError", params)
+
+                commandProcesses.remove(commandId)
+                promise.reject("SHELL_ERROR", e.message, e)
+            }
+        }.start()
+    }
+
+    @ReactMethod
+    fun killCommand(commandId: String, promise: Promise) {
+        try {
+            val process = commandProcesses[commandId]
+            if (process != null) {
+                process.destroy()
+                commandProcesses.remove(commandId)
+                promise.resolve(true)
+            } else {
+                promise.resolve(false)
+            }
+        } catch (e: Exception) {
+            promise.reject("KILL_ERROR", e.message, e)
         }
     }
 

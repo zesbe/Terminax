@@ -3,14 +3,25 @@ import {View, Text, TouchableOpacity, StyleSheet, ScrollView} from 'react-native
 
 interface CustomKeyboardProps {
   onKeyPress: (key: string) => void;
+  onQuickCommand?: (command: string) => void;
   visible: boolean;
 }
 
 const CustomKeyboard: React.FC<CustomKeyboardProps> = ({
   onKeyPress,
+  onQuickCommand,
   visible,
 }) => {
   if (!visible) return null;
+
+  const quickCommands = [
+    {label: 'ls', cmd: 'ls -la', color: '#4ecdc4'},
+    {label: 'pwd', cmd: 'pwd', color: '#4ecdc4'},
+    {label: 'clear', cmd: 'clear', color: '#ff6b6b'},
+    {label: 'help', cmd: 'help', color: '#95e1d3'},
+    {label: 'ping', cmd: 'ping -c 4 1.1.1.1', color: '#ffd93d'},
+    {label: 'ps', cmd: 'ps', color: '#aa96da'},
+  ];
 
   const specialKeys = [
     {label: 'ESC', value: '\x1B', color: '#ff6b6b'},
@@ -59,6 +70,20 @@ const CustomKeyboard: React.FC<CustomKeyboardProps> = ({
     <View style={styles.container}>
       <ScrollView horizontal showsHorizontalScrollIndicator={false}>
         <View style={styles.keyboardContainer}>
+          {/* Quick Commands Row */}
+          {onQuickCommand && (
+            <View style={styles.row}>
+              {quickCommands.map(cmd => (
+                <TouchableOpacity
+                  key={cmd.label}
+                  style={[styles.key, {backgroundColor: cmd.color}]}
+                  onPress={() => onQuickCommand(cmd.cmd)}>
+                  <Text style={styles.keyText}>{cmd.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
           {/* Special Keys Row */}
           <View style={styles.row}>
             {specialKeys.slice(0, 8).map(key => renderKey(key.label, key.value, key.color))}
