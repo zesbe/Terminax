@@ -20,6 +20,13 @@ interface ShellModuleType {
     shell: string;
     isTermux: boolean;
     isSystemShell: boolean;
+    workingDir: string;
+    path: string;
+  }>;
+  testCommand(): Promise<{
+    output: string;
+    shell: string;
+    workingDir: string;
   }>;
 }
 

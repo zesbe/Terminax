@@ -69,14 +69,26 @@ const App = () => {
         : 'Android System Shell (Limited)';
       outputs.push({
         id: `${id}-shell`,
-        text: `Using: ${shellType}`,
+        text: `Shell: ${shellType}`,
+        type: 'output',
+        timestamp: Date.now(),
+      });
+      outputs.push({
+        id: `${id}-shell-path`,
+        text: `Binary: ${shellInfo.shell}`,
+        type: 'output',
+        timestamp: Date.now(),
+      });
+      outputs.push({
+        id: `${id}-working-dir`,
+        text: `Working Dir: ${shellInfo.workingDir}`,
         type: 'output',
         timestamp: Date.now(),
       });
       if (shellInfo.isSystemShell) {
         outputs.push({
           id: `${id}-warning`,
-          text: 'Note: Some commands (pkg, apt) are not available in system shell',
+          text: 'Note: Termux commands (pkg, apt) not available. Try: ls, pwd, echo, ps',
           type: 'output',
           timestamp: Date.now(),
         });

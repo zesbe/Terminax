@@ -52,34 +52,72 @@ class ShellModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
         try {
             val (shell, env) = getShellConfig()
 
+            // Validate and fix working directory
+            var validWorkingDir = File(workingDir)
+            if (!validWorkingDir.exists() || !validWorkingDir.isDirectory) {
+                // Fallback to app's files directory
+                validWorkingDir = reactContext.filesDir
+            }
+
             // Execute command with detected shell
             val process = Runtime.getRuntime().exec(
                 arrayOf(shell, "-c", command),
                 env,
-                File(workingDir)
+                validWorkingDir
             )
 
             val output = StringBuilder()
             val error = StringBuilder()
 
-            val outputReader = BufferedReader(InputStreamReader(process.inputStream))
-            val errorReader = BufferedReader(InputStreamReader(process.errorStream))
-
-            var line: String?
-            while (outputReader.readLine().also { line = it } != null) {
-                output.append(line).append("\n")
+            // Read output and error streams in parallel to prevent deadlock
+            val outputThread = Thread {
+                try {
+                    BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
+                        var line: String?
+                        while (reader.readLine().also { line = it } != null) {
+                            output.append(line).append("\n")
+                        }
+                    }
+                } catch (e: Exception) {
+                    // Ignore
+                }
             }
 
-            while (errorReader.readLine().also { line = it } != null) {
-                error.append(line).append("\n")
+            val errorThread = Thread {
+                try {
+                    BufferedReader(InputStreamReader(process.errorStream)).use { reader ->
+                        var line: String?
+                        while (reader.readLine().also { line = it } != null) {
+                            error.append(line).append("\n")
+                        }
+                    }
+                } catch (e: Exception) {
+                    // Ignore
+                }
             }
 
-            val exitCode = process.waitFor()
+            outputThread.start()
+            errorThread.start()
+
+            // Wait for process with timeout
+            val finished = process.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)
+
+            // Wait for output threads to finish
+            outputThread.join(1000)
+            errorThread.join(1000)
 
             val result = Arguments.createMap()
-            result.putString("output", output.toString())
-            result.putString("error", error.toString())
-            result.putInt("exitCode", exitCode)
+
+            if (!finished) {
+                process.destroy()
+                result.putString("output", output.toString())
+                result.putString("error", error.toString() + "\nCommand timeout (30 seconds)")
+                result.putInt("exitCode", -1)
+            } else {
+                result.putString("output", output.toString())
+                result.putString("error", error.toString())
+                result.putInt("exitCode", process.exitValue())
+            }
 
             promise.resolve(result)
 
@@ -158,16 +196,53 @@ class ShellModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
     @ReactMethod
     fun getShellInfo(promise: Promise) {
         try {
-            val (shell, _) = getShellConfig()
+            val (shell, env) = getShellConfig()
             val info = Arguments.createMap()
 
             info.putString("shell", shell)
             info.putBoolean("isTermux", shell.contains("termux"))
             info.putBoolean("isSystemShell", !shell.contains("termux"))
+            info.putString("workingDir", reactContext.filesDir.absolutePath)
+
+            // Add PATH for debugging
+            val pathEnv = env.find { it.startsWith("PATH=") }
+            info.putString("path", pathEnv ?: "")
 
             promise.resolve(info)
         } catch (e: Exception) {
             promise.reject("SHELL_INFO_ERROR", e.message, e)
+        }
+    }
+
+    @ReactMethod
+    fun testCommand(promise: Promise) {
+        try {
+            // Simple test to verify shell works
+            val (shell, env) = getShellConfig()
+            val process = Runtime.getRuntime().exec(
+                arrayOf(shell, "-c", "echo 'Shell test OK'"),
+                env,
+                reactContext.filesDir
+            )
+
+            val output = StringBuilder()
+            BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
+                var line: String?
+                while (reader.readLine().also { line = it } != null) {
+                    output.append(line).append("\n")
+                }
+            }
+
+            process.waitFor()
+
+            val result = Arguments.createMap()
+            result.putString("output", output.toString())
+            result.putString("shell", shell)
+            result.putString("workingDir", reactContext.filesDir.absolutePath)
+
+            promise.resolve(result)
+        } catch (e: Exception) {
+            promise.reject("TEST_ERROR", e.message, e)
         }
     }
 
