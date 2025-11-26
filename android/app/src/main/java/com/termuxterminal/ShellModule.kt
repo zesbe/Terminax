@@ -15,7 +15,30 @@ class ShellModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
     @ReactMethod
     fun executeCommand(command: String, workingDir: String, promise: Promise) {
         try {
-            val process = Runtime.getRuntime().exec(arrayOf("/system/bin/sh", "-c", command), null, File(workingDir))
+            // Use Termux shell instead of Android system shell
+            val termuxShell = "/data/data/com.termux/files/usr/bin/bash"
+            val termuxPrefix = "/data/data/com.termux/files/usr"
+            val termuxHome = "/data/data/com.termux/files/home"
+
+            // Build Termux environment
+            val termuxEnv = arrayOf(
+                "PATH=$termuxPrefix/bin:$termuxPrefix/bin/applets",
+                "PREFIX=$termuxPrefix",
+                "HOME=$termuxHome",
+                "TMPDIR=$termuxPrefix/tmp",
+                "LD_LIBRARY_PATH=$termuxPrefix/lib",
+                "LANG=en_US.UTF-8",
+                "TERM=xterm-256color",
+                "SHELL=$termuxShell"
+            )
+
+            // Execute command with Termux shell and environment
+            val process = Runtime.getRuntime().exec(
+                arrayOf(termuxShell, "-c", command),
+                termuxEnv,
+                File(workingDir)
+            )
+
             val output = StringBuilder()
             val error = StringBuilder()
 
@@ -98,8 +121,9 @@ class ShellModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
     @ReactMethod
     fun getCurrentDirectory(promise: Promise) {
         try {
-            val currentDir = File(".").absolutePath
-            promise.resolve(currentDir)
+            // Return Termux home directory as default
+            val termuxHome = "/data/data/com.termux/files/home"
+            promise.resolve(termuxHome)
         } catch (e: Exception) {
             promise.reject("DIR_ERROR", e.message, e)
         }
@@ -108,11 +132,22 @@ class ShellModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
     @ReactMethod
     fun getEnvironmentVariables(promise: Promise) {
         try {
+            val termuxPrefix = "/data/data/com.termux/files/usr"
+            val termuxHome = "/data/data/com.termux/files/home"
+
             val envMap = Arguments.createMap()
-            val env = System.getenv()
-            env.forEach { (key, value) ->
-                envMap.putString(key, value)
-            }
+            // Add Termux-specific environment variables
+            envMap.putString("USER", "termux")
+            envMap.putString("HOSTNAME", "localhost")
+            envMap.putString("HOME", termuxHome)
+            envMap.putString("PREFIX", termuxPrefix)
+            envMap.putString("PATH", "$termuxPrefix/bin:$termuxPrefix/bin/applets")
+            envMap.putString("TMPDIR", "$termuxPrefix/tmp")
+            envMap.putString("LD_LIBRARY_PATH", "$termuxPrefix/lib")
+            envMap.putString("LANG", "en_US.UTF-8")
+            envMap.putString("TERM", "xterm-256color")
+            envMap.putString("SHELL", "$termuxPrefix/bin/bash")
+
             promise.resolve(envMap)
         } catch (e: Exception) {
             promise.reject("ENV_ERROR", e.message, e)
