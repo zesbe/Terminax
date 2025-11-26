@@ -16,6 +16,11 @@ interface ShellModuleType {
   }>>;
   getCurrentDirectory(): Promise<string>;
   getEnvironmentVariables(): Promise<Record<string, string>>;
+  getShellInfo(): Promise<{
+    shell: string;
+    isTermux: boolean;
+    isSystemShell: boolean;
+  }>;
 }
 
 const {ShellModule} = NativeModules;

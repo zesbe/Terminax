@@ -12,17 +12,16 @@ class ShellModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
         return "ShellModule"
     }
 
-    @ReactMethod
-    fun executeCommand(command: String, workingDir: String, promise: Promise) {
-        try {
-            // Use Termux shell instead of Android system shell
-            val termuxShell = "/data/data/com.termux/files/usr/bin/bash"
-            val termuxPrefix = "/data/data/com.termux/files/usr"
-            val termuxHome = "/data/data/com.termux/files/home"
+    private fun getShellConfig(): Pair<String, Array<String>> {
+        // Try Termux shell first (if app can access it)
+        val termuxShell = "/data/data/com.termux/files/usr/bin/bash"
+        val termuxPrefix = "/data/data/com.termux/files/usr"
+        val termuxHome = "/data/data/com.termux/files/home"
 
-            // Build Termux environment
+        if (File(termuxShell).exists()) {
+            // Use Termux shell with full environment
             val termuxEnv = arrayOf(
-                "PATH=$termuxPrefix/bin:$termuxPrefix/bin/applets",
+                "PATH=$termuxPrefix/bin:$termuxPrefix/bin/applets:/system/bin:/system/xbin",
                 "PREFIX=$termuxPrefix",
                 "HOME=$termuxHome",
                 "TMPDIR=$termuxPrefix/tmp",
@@ -31,11 +30,32 @@ class ShellModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
                 "TERM=xterm-256color",
                 "SHELL=$termuxShell"
             )
+            return Pair(termuxShell, termuxEnv)
+        }
 
-            // Execute command with Termux shell and environment
+        // Fallback to Android system shell
+        val systemShell = "/system/bin/sh"
+        val appHome = reactContext.filesDir.absolutePath
+        val systemEnv = arrayOf(
+            "PATH=/system/bin:/system/xbin:/sbin:/vendor/bin",
+            "HOME=$appHome",
+            "TMPDIR=${reactContext.cacheDir.absolutePath}",
+            "LANG=en_US.UTF-8",
+            "TERM=xterm-256color",
+            "SHELL=$systemShell"
+        )
+        return Pair(systemShell, systemEnv)
+    }
+
+    @ReactMethod
+    fun executeCommand(command: String, workingDir: String, promise: Promise) {
+        try {
+            val (shell, env) = getShellConfig()
+
+            // Execute command with detected shell
             val process = Runtime.getRuntime().exec(
-                arrayOf(termuxShell, "-c", command),
-                termuxEnv,
+                arrayOf(shell, "-c", command),
+                env,
                 File(workingDir)
             )
 
@@ -121,32 +141,71 @@ class ShellModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
     @ReactMethod
     fun getCurrentDirectory(promise: Promise) {
         try {
-            // Return Termux home directory as default
+            // Check if Termux is accessible
             val termuxHome = "/data/data/com.termux/files/home"
-            promise.resolve(termuxHome)
+            if (File(termuxHome).exists() && File(termuxHome).canRead()) {
+                promise.resolve(termuxHome)
+            } else {
+                // Fallback to app's own files directory
+                val appHome = reactContext.filesDir.absolutePath
+                promise.resolve(appHome)
+            }
         } catch (e: Exception) {
             promise.reject("DIR_ERROR", e.message, e)
         }
     }
 
     @ReactMethod
+    fun getShellInfo(promise: Promise) {
+        try {
+            val (shell, _) = getShellConfig()
+            val info = Arguments.createMap()
+
+            info.putString("shell", shell)
+            info.putBoolean("isTermux", shell.contains("termux"))
+            info.putBoolean("isSystemShell", !shell.contains("termux"))
+
+            promise.resolve(info)
+        } catch (e: Exception) {
+            promise.reject("SHELL_INFO_ERROR", e.message, e)
+        }
+    }
+
+    @ReactMethod
     fun getEnvironmentVariables(promise: Promise) {
         try {
-            val termuxPrefix = "/data/data/com.termux/files/usr"
-            val termuxHome = "/data/data/com.termux/files/home"
-
             val envMap = Arguments.createMap()
-            // Add Termux-specific environment variables
-            envMap.putString("USER", "termux")
-            envMap.putString("HOSTNAME", "localhost")
-            envMap.putString("HOME", termuxHome)
-            envMap.putString("PREFIX", termuxPrefix)
-            envMap.putString("PATH", "$termuxPrefix/bin:$termuxPrefix/bin/applets")
-            envMap.putString("TMPDIR", "$termuxPrefix/tmp")
-            envMap.putString("LD_LIBRARY_PATH", "$termuxPrefix/lib")
+            val (shell, _) = getShellConfig()
+
+            // Check if using Termux or system shell
+            if (shell.contains("termux")) {
+                // Termux environment
+                val termuxPrefix = "/data/data/com.termux/files/usr"
+                val termuxHome = "/data/data/com.termux/files/home"
+
+                envMap.putString("USER", "termux")
+                envMap.putString("HOSTNAME", "localhost")
+                envMap.putString("HOME", termuxHome)
+                envMap.putString("PREFIX", termuxPrefix)
+                envMap.putString("PATH", "$termuxPrefix/bin:$termuxPrefix/bin/applets:/system/bin")
+                envMap.putString("TMPDIR", "$termuxPrefix/tmp")
+                envMap.putString("LD_LIBRARY_PATH", "$termuxPrefix/lib")
+                envMap.putString("SHELL", shell)
+            } else {
+                // Android system shell environment
+                val appHome = reactContext.filesDir.absolutePath
+
+                envMap.putString("USER", "android")
+                envMap.putString("HOSTNAME", "localhost")
+                envMap.putString("HOME", appHome)
+                envMap.putString("PATH", "/system/bin:/system/xbin:/sbin:/vendor/bin")
+                envMap.putString("TMPDIR", reactContext.cacheDir.absolutePath)
+                envMap.putString("SHELL", shell)
+            }
+
+            // Common variables
             envMap.putString("LANG", "en_US.UTF-8")
             envMap.putString("TERM", "xterm-256color")
-            envMap.putString("SHELL", "$termuxPrefix/bin/bash")
 
             promise.resolve(envMap)
         } catch (e: Exception) {

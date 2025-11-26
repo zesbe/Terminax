@@ -29,8 +29,9 @@ const App = () => {
     try {
       const currentDir = await ShellModule.getCurrentDirectory();
       const env = await ShellModule.getEnvironmentVariables();
+      const shellInfo = await ShellModule.getShellInfo();
 
-      const newSession = createNewSession(currentDir, env);
+      const newSession = createNewSession(currentDir, env, shellInfo);
       setSessions([newSession]);
       setActiveSessionId(newSession.id);
     } catch (error) {
@@ -49,25 +50,50 @@ const App = () => {
   const createNewSession = (
     currentDir: string,
     env: Record<string, string>,
+    shellInfo?: {shell: string; isTermux: boolean; isSystemShell: boolean},
   ): TerminalSession => {
     const id = Date.now().toString();
+    const outputs: TerminalOutput[] = [
+      {
+        id: `${id}-welcome`,
+        text: 'Welcome to TermuxTerminal!',
+        type: 'output',
+        timestamp: Date.now(),
+      },
+    ];
+
+    // Add shell info if available
+    if (shellInfo) {
+      const shellType = shellInfo.isTermux
+        ? 'Termux Shell (Full Access)'
+        : 'Android System Shell (Limited)';
+      outputs.push({
+        id: `${id}-shell`,
+        text: `Using: ${shellType}`,
+        type: 'output',
+        timestamp: Date.now(),
+      });
+      if (shellInfo.isSystemShell) {
+        outputs.push({
+          id: `${id}-warning`,
+          text: 'Note: Some commands (pkg, apt) are not available in system shell',
+          type: 'output',
+          timestamp: Date.now(),
+        });
+      }
+    }
+
+    outputs.push({
+      id: `${id}-info`,
+      text: 'Type your commands below...',
+      type: 'output',
+      timestamp: Date.now(),
+    });
+
     return {
       id,
       name: `Session ${sessions.length + 1}`,
-      outputs: [
-        {
-          id: `${id}-welcome`,
-          text: 'Welcome to TermuxTerminal!',
-          type: 'output',
-          timestamp: Date.now(),
-        },
-        {
-          id: `${id}-info`,
-          text: 'Type your commands below...',
-          type: 'output',
-          timestamp: Date.now(),
-        },
-      ],
+      outputs,
       currentDirectory: currentDir,
       environment: env,
     };
@@ -157,7 +183,8 @@ const App = () => {
     try {
       const currentDir = await ShellModule.getCurrentDirectory();
       const env = await ShellModule.getEnvironmentVariables();
-      const newSession = createNewSession(currentDir, env);
+      const shellInfo = await ShellModule.getShellInfo();
+      const newSession = createNewSession(currentDir, env, shellInfo);
       setSessions([...sessions, newSession]);
       setActiveSessionId(newSession.id);
     } catch (error) {
